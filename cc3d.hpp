@@ -387,7 +387,7 @@ OUT* connected_components3d_26(
     T* in_labels, 
     const int64_t sx, const int64_t sy, const int64_t sz,
     size_t max_labels, OUT *out_labels = NULL, 
-    size_t &N = _dummy_N, const int64_t parallel = 1
+    size_t &N = _dummy_N, int64_t parallel = 1
   ) {
 
 	const int64_t sxy = sx * sy;
@@ -400,6 +400,9 @@ OUT* connected_components3d_26(
   if (max_labels == 0) {
     return out_labels;
   }
+
+  // every slab needs at least one z-plane
+  parallel = std::max(std::min(parallel, sz), static_cast<int64_t>(1));
 
   // slab p covers z in [zs[p], zs[p+1])
   std::vector<int64_t> zs(parallel + 1);
