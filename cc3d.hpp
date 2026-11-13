@@ -350,29 +350,34 @@ size_t estimate_provisional_label_count(
 
 template <typename T>
 uint32_t* compute_foreground_index(
-  T* in_labels, const int64_t sx, const int64_t sy, const int64_t sz
+  T* in_labels, const int64_t sx, const int64_t sy, const int64_t sz,
+  const int64_t parallel = 1
 ) {
-  const int64_t voxels = sx * sy * sz;
-  uint32_t* runs = new uint32_t[2*sy*sz]();
+  const int64_t rows = sy * sz;
+  uint32_t* runs = new uint32_t[2*rows]();
 
-  size_t count = 0; // number of transitions between labels
-  int64_t row = 0;
-  for (int64_t loc = 0; loc < voxels; loc += sx, row++) {
-    count += (in_labels[loc] != 0);
-    size_t index = (row << 1);
-    for (int64_t x = 0; x < sx; x++) {
-      if (in_labels[loc + x]) {
-          runs[index] = static_cast<uint32_t>(x);
-          break;
+  ThreadPool pool(parallel);
+  for (int64_t p = 0; p < parallel; p++) {
+    pool.enqueue([=](){
+      for (int64_t row = rows * p / parallel; row < rows * (p + 1) / parallel; row++) {
+        const int64_t loc = row * sx;
+        const size_t index = (row << 1);
+        for (int64_t x = 0; x < sx; x++) {
+          if (in_labels[loc + x]) {
+            runs[index] = static_cast<uint32_t>(x);
+            break;
+          }
+        }
+        for (int64_t x = sx - 1; x >= runs[index]; x--) {
+          if (in_labels[loc + x]) {
+            runs[index+1] = static_cast<uint32_t>(x + 1);
+            break;
+          }
+        }
       }
-    }
-    for (int64_t x = sx - 1; x >= runs[index]; x--) {
-      if (in_labels[loc + x]) {
-        runs[index+1] = static_cast<uint32_t>(x + 1);
-        break;
-      }
-    }
+    });
   }
+  pool.join();
 
   return runs;
 }
@@ -451,7 +456,7 @@ OUT* connected_components3d_26(
   std::cout << "allocate: " << std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin).count() << "µs" << std::endl;
 
   time_begin = std::chrono::high_resolution_clock::now();
-  const uint32_t *runs = compute_foreground_index(in_labels, sx, sy, sz);
+  const uint32_t *runs = compute_foreground_index(in_labels, sx, sy, sz, parallel);
   time_end = std::chrono::high_resolution_clock::now();
   
   std::cout << "foreground index: " << std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin).count() << "µs" << std::endl;
