@@ -710,98 +710,52 @@ OUT* connected_components3d_26(
   time_begin = std::chrono::high_resolution_clock::now();
   
   if (parallel > 1) {
-    // I think this can be parallelized too
-    // if unify skips path compression.
-    // printf("resolve start\n");
+    // Each boundary plane (first plane of slab p, neighbors in the last plane of
+    // slab p-1) is scanned by its own task and reduced to distinct label pairs.
+    // Only those few pairs are unified serially, so the DSU needs no locking.
+    const int64_t nb[9] = { A, B, C, D, E, F, G, H, I };
+    std::vector<std::vector<std::pair<OUT,OUT>>> pairs(parallel);
+    ThreadPool pool(parallel);
     for (int64_t p = 1; p < parallel; p++) {
-      const int64_t z = zs[p];
-      int64_t row = z * sy;
-      for (int64_t y = 0; y < sy; y++, row++) {
-        const int64_t xstart = runs[row << 1];
-        const int64_t xend = runs[(row << 1) + 1];
-
-        for (int64_t x = xstart; x < xend; x++) {
-          int64_t loc = x + sx * y + sxy * z;
-          const T cur = in_labels[loc];
-
-          if (cur == 0) {
-            continue;
-          }
-
-          if (z > 0 && cur == in_labels[loc + E]) {
-            equivalences.unify(out_labels[loc], out_labels[loc + E]);
-          }
-          else if (x > 0 && z > 0 && cur == in_labels[loc + D]) {
-            equivalences.unify(out_labels[loc], out_labels[loc + D]); 
-            if (x < sx - 1 && z > 0 && cur == in_labels[loc + F]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + F]);
+      pool.enqueue([&, p](){
+        auto &pr = pairs[p];
+        const int64_t z = zs[p];
+        for (int64_t y = 0; y < sy; y++) {
+          const int64_t row = z * sy + y;
+          const int64_t xend = runs[(row << 1) + 1];
+          for (int64_t x = runs[row << 1]; x < xend; x++) {
+            const int64_t loc = x + sx * y + sxy * z;
+            const T cur = in_labels[loc];
+            if (cur == 0) {
+              continue;
             }
-            else if (x < sx - 1 && y > 0 && z > 0 && cur == in_labels[loc + C]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + C]);
-
-              if (x < sx - 1 && y < sy - 1 && z > 0 && cur == in_labels[loc + I]) {
-                equivalences.unify(out_labels[loc], out_labels[loc + I]);
+            // Every same-colored cell of the 3x3 below touches E, so the previous
+            // slab already joined them to E: if E matches, it is the only pair needed.
+            const bool e_match = (in_labels[loc + E] == cur);
+            for (int k = e_match ? 4 : 0; k < (e_match ? 5 : 9); k++) { // k -> (dx, dy) = (k%3 - 1, k/3 - 1)
+              const int64_t xx = x + k % 3 - 1, yy = y + k / 3 - 1;
+              if (xx < 0 || xx >= sx || yy < 0 || yy >= sy || in_labels[loc + nb[k]] != cur) {
+                continue;
               }
-            }
-            else if (x < sx - 1 && y < sy - 1 && z > 0 && cur == in_labels[loc + I]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + I]);
-            }
-          }
-          else if (y > 0 && z > 0 && cur == in_labels[loc + B]) {
-            equivalences.unify(out_labels[loc], out_labels[loc + B]);
-
-            if (y < sy - 1 && z > 0 && cur == in_labels[loc + H]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + H]);
-            }
-            else if (x > 0 && y < sy - 1 && z > 0 && cur == in_labels[loc + G]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + G]);
-              
-              if (x < sx - 1 && y < sy - 1 && z > 0 && cur == in_labels[loc + I]) {
-                equivalences.unify(out_labels[loc], out_labels[loc + I]);
+              const std::pair<OUT,OUT> e(out_labels[loc], out_labels[loc + nb[k]]);
+              if (pr.empty() || pr.back() != e) {
+                pr.push_back(e);
               }
-            }
-            else if (x < sx - 1 && y < sy - 1 && z > 0 && cur == in_labels[loc + I]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + I]);
-            }
-          }
-          else if (x < sx - 1 && z > 0 && cur == in_labels[loc + F]) {
-            equivalences.unify(out_labels[loc], out_labels[loc + F]);
-
-            if (x > 0 && y > 0 && z > 0 && cur == in_labels[loc + A]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + A]);
-            }
-            if (x > 0 && y < sy - 1 && z > 0 && cur == in_labels[loc + G]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + G]); 
-            }
-          }
-          else if (y < sy - 1 && z > 0 && cur == in_labels[loc + H]) {
-            equivalences.unify(out_labels[loc], out_labels[loc + H]);
-            if (x > 0 && y > 0 && z > 0 && cur == in_labels[loc + A]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + A]);
-            }
-            if (x < sx - 1 && y > 0 && z > 0 && cur == in_labels[loc + C]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + C]);
-            }
-          }
-          else {
-            if (x > 0 && y > 0 && z > 0 && cur == in_labels[loc + A]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + A]);
-            }
-            if (x < sx - 1 && y > 0 && z > 0 && cur == in_labels[loc + C]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + C]);
-            }
-            if (x > 0 && y < sy - 1 && z > 0 && cur == in_labels[loc + G]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + G]); 
-            }
-            if (x < sx - 1 && y < sy - 1 && z > 0 && cur == in_labels[loc + I]) {
-              equivalences.unify(out_labels[loc], out_labels[loc + I]);
             }
           }
         }
-      }    
+        std::sort(pr.begin(), pr.end());
+        pr.erase(std::unique(pr.begin(), pr.end()), pr.end());
+      });
+    }
+    pool.join();
+
+    for (auto &pr : pairs) {
+      for (auto &e : pr) {
+        equivalences.unify(e.first, e.second);
+      }
     }
   }
-
   time_end = std::chrono::high_resolution_clock::now();
   
   std::cout << "unify pass: " << std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin).count() << "µs" << std::endl;
