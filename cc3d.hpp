@@ -396,7 +396,11 @@ OUT* connected_components3d_26(
     return out_labels;
   }
 
-  const int64_t partition = sz / parallel;
+  // slab p covers z in [zs[p], zs[p+1])
+  std::vector<int64_t> zs(parallel + 1);
+  for (int64_t p = 0; p <= parallel; p++) {
+    zs[p] = p * (sz / parallel) + std::min(p, sz % parallel);
+  }
 
   std::vector<size_t> label_offsets(parallel * 2);
 
@@ -405,12 +409,11 @@ OUT* connected_components3d_26(
   auto time_begin = std::chrono::high_resolution_clock::now();
   
 
-  uint64_t partition_size = sxy * partition;
   for (int i = 0; i < parallel; i++) {
     pool1.enqueue(
-      [&, i, partition_size](){
+      [&, i](){
         uint64_t epl = estimate_provisional_label_count<T>(
-          in_labels + i * partition_size, sx, partition_size
+          in_labels + zs[i] * sxy, sx, (zs[i+1] - zs[i]) * sxy
         );
         label_offsets[i * 2] = epl;
       }
@@ -489,8 +492,8 @@ OUT* connected_components3d_26(
     
     OUT next_label = next_label_start;
     int64_t loc = 0;
-    int64_t row = p * partition * sy;
-    // printf("(%d) row: %d, %d, %d, %d\n", p, row, partition, sxy, sz);
+    int64_t row = zs[p] * sy;
+    // printf("(%d) row: %d, %d, %d\n", p, row, sxy, sz);
 
     for (int64_t z = 0; z < sz; z++) {
       for (int64_t y = 0; y < sy; y++, row++) {
@@ -687,23 +690,14 @@ OUT* connected_components3d_26(
 
   time_begin = std::chrono::high_resolution_clock::now();
 
-  int64_t partition_offset = 0;
   for (int64_t p = 0; p < parallel; p++) {
-    const int64_t zstart = p * partition;
-    const int64_t zend = (p == parallel - 1)
-      ? sz
-      : (p+1) * partition;
-    pool.enqueue([&, p, partition_offset, zstart, zend](){
+    const int64_t zstart = zs[p];
+    const int64_t zend = zs[p+1];
+    pool.enqueue([&, p, zstart, zend](){
       // printf("%d start\n", p);
-      equivfn(
-        p, 
-        (in_labels + partition_offset), 
-        (out_labels + partition_offset), 
-        (zend - zstart)
-      );
+      equivfn(p, in_labels + zstart * sxy, out_labels + zstart * sxy, zend - zstart);
       // printf("%d end\n", p);
     });
-    partition_offset += (zend - zstart) * sxy;
   }
 
   pool.join();
@@ -719,7 +713,8 @@ OUT* connected_components3d_26(
     // I think this can be parallelized too
     // if unify skips path compression.
     // printf("resolve start\n");
-    for (int64_t z = partition; z < sz; z += partition) {
+    for (int64_t p = 1; p < parallel; p++) {
+      const int64_t z = zs[p];
       int64_t row = z * sy;
       for (int64_t y = 0; y < sy; y++, row++) {
         const int64_t xstart = runs[row << 1];
