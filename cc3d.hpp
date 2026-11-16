@@ -719,14 +719,19 @@ OUT* connected_components3d_26(
   
   if (parallel > 1) {
     // Each boundary plane (first plane of slab p, neighbors in the last plane of
-    // slab p-1) is scanned by its own task and reduced to distinct label pairs.
-    // Only those few pairs are unified serially, so the DSU needs no locking.
+    // slab p-1) is scanned by its own task and reduced to label pairs. A small
+    // hash cache of recently seen pairs drops most duplicates without sorting;
+    // the few that slip through are harmless to unify twice. Only those pairs
+    // are unified serially, so the DSU needs no locking.
     const int64_t nb[9] = { A, B, C, D, E, F, G, H, I };
     std::vector<std::vector<std::pair<OUT,OUT>>> pairs(parallel);
     ThreadPool pool(parallel);
     for (int64_t p = 1; p < parallel; p++) {
       pool.enqueue([&, p](){
         auto &pr = pairs[p];
+        // direct-mapped cache, slot = top 12 bits of a Fibonacci hash of the pair;
+        // labels start at 1, so the initial {0,0} never matches
+        std::vector<std::pair<OUT,OUT>> seen(4096);
         const int64_t z = zs[p];
         for (int64_t y = 0; y < sy; y++) {
           const int64_t row = z * sy + y;
@@ -746,14 +751,14 @@ OUT* connected_components3d_26(
                 continue;
               }
               const std::pair<OUT,OUT> e(out_labels[loc], out_labels[loc + nb[k]]);
-              if (pr.empty() || pr.back() != e) {
+              auto &slot = seen[((static_cast<uint64_t>(e.first) << 32 | e.second) * 0x9E3779B97F4A7C15ULL) >> 52];
+              if (slot != e) {
+                slot = e;
                 pr.push_back(e);
               }
             }
           }
         }
-        std::sort(pr.begin(), pr.end());
-        pr.erase(std::unique(pr.begin(), pr.end()), pr.end());
       });
     }
     pool.join();
